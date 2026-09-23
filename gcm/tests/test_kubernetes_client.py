@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from gcm.monitoring.kubernetes.client import get_pod_node_mapping
 from gcm.monitoring.kubernetes.fake_client import KubernetesFakeClient
 from gcm.schemas.kubernetes.node import KubernetesNodeConditionRow
 from gcm.schemas.kubernetes.pod import KubernetesPodRow
@@ -65,6 +66,24 @@ class TestKubernetesFakeClient(unittest.TestCase):
         client = KubernetesFakeClient(pods=pods)
         result = list(client.list_pods())
         self.assertEqual(result[0].slurm_job_id, "12345")
+
+    def test_get_pod_node_mapping(self) -> None:
+        client = KubernetesFakeClient(
+            pods=[
+                KubernetesPodRow(name="slurm-node-1", node_name="host-1"),
+                KubernetesPodRow(name="slurm-node-2", node_name="host-2"),
+                KubernetesPodRow(name="pending-pod", node_name=None),
+                KubernetesPodRow(name=None, node_name="host-3"),
+            ]
+        )
+
+        self.assertEqual(
+            get_pod_node_mapping(client),
+            {
+                "slurm-node-1": "host-1",
+                "slurm-node-2": "host-2",
+            },
+        )
 
 
 class TestKubernetesApiClient(unittest.TestCase):
