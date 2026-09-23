@@ -187,6 +187,28 @@ class TestKubernetesApiClient(unittest.TestCase):
         client._core_api.list_namespaced_pod.assert_called_once_with(
             namespace="my-ns",
             label_selector="app=test",
+            _request_timeout=None,
+        )
+
+    @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
+    def test_list_pods_with_request_timeout(self, mock_init: MagicMock) -> None:
+        mock_init.return_value = None
+
+        from gcm.monitoring.kubernetes.api_client import KubernetesApiClient
+
+        client = KubernetesApiClient.__new__(KubernetesApiClient)
+        client._core_api = MagicMock()
+        client._request_timeout_seconds = 5.0
+        mock_response = MagicMock()
+        mock_response.items = []
+        client._core_api.list_namespaced_pod.return_value = mock_response
+
+        list(client.list_pods(namespace="my-ns", label_selector="app=test"))
+
+        client._core_api.list_namespaced_pod.assert_called_once_with(
+            namespace="my-ns",
+            label_selector="app=test",
+            _request_timeout=5.0,
         )
 
     @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
