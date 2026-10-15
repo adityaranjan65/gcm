@@ -1,6 +1,13 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
+import importlib.util
+import json
+import os
+import socket
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from gcm.monitoring.kubernetes.client import get_pod_node_mapping
@@ -198,7 +205,7 @@ class TestKubernetesApiClient(unittest.TestCase):
 
         client = KubernetesApiClient.__new__(KubernetesApiClient)
         client._core_api = MagicMock()
-        client._request_timeout_seconds = 5.0
+        client._request_timeout_seconds = (5.0, 15.0)
         mock_response = MagicMock()
         mock_response.items = []
         client._core_api.list_namespaced_pod.return_value = mock_response
@@ -208,8 +215,133 @@ class TestKubernetesApiClient(unittest.TestCase):
         client._core_api.list_namespaced_pod.assert_called_once_with(
             namespace="my-ns",
             label_selector="app=test",
-            _request_timeout=5.0,
+            _request_timeout=(5.0, 15.0),
         )
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("kubernetes"),
+        "requires the optional kubernetes package",
+    )
+    def test_request_timeout_bounds_stalled_api_server(self) -> None:
+        """A server that accepts connections but never replies must not block."""
+        from gcm.monitoring.kubernetes.api_client import KubernetesApiClient
+
+        server = socket.socket()
+        self.addCleanup(server.close)
+        server.bind(("127.0.0.1", 0))
+        server.listen(8)
+        accepted = []
+
+        def accept_forever() -> None:
+            while True:
+                accepted.append(server.accept()[0])
+
+        threading.Thread(target=accept_forever, daemon=True).start()
+        kubeconfig = Path(tempfile.mkdtemp()) / "kubeconfig"
+        kubeconfig.write_text(
+            json.dumps(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Config",
+                    "clusters": [
+                        {
+                            "name": "stalled",
+                            "cluster": {
+                                "server": f"http://127.0.0.1:{server.getsockname()[1]}"
+                            },
+                        }
+                    ],
+                    "users": [{"name": "u", "user": {"token": "t"}}],
+                    "contexts": [
+                        {"name": "c", "context": {"cluster": "stalled", "user": "u"}}
+                    ],
+                    "current-context": "c",
+                }
+            )
+        )
+        with patch.dict(os.environ, {"KUBECONFIG": str(kubeconfig)}):
+            client = KubernetesApiClient(
+                in_cluster=False, request_timeout_seconds=(0.2, 0.2)
+            )
+        errors: list[Exception] = []
+
+        def list_pods() -> None:
+            try:
+                list(client.list_pod_nodes(namespace="tenant-slurm"))
+            except Exception as e:
+                errors.append(e)
+
+        worker = threading.Thread(target=list_pods, daemon=True)
+        worker.start()
+        worker.join(timeout=10)
+
+        self.assertFalse(worker.is_alive(), "request was not bounded by its timeout")
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], RuntimeError)
+        for conn in accepted:
+            conn.close()
+
+    @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
+    def test_list_pod_nodes_parses_raw_response(self, mock_init: MagicMock) -> None:
+        mock_init.return_value = None
+
+        from gcm.monitoring.kubernetes.api_client import KubernetesApiClient
+
+        client = KubernetesApiClient.__new__(KubernetesApiClient)
+        client._core_api = MagicMock()
+        client._request_timeout_seconds = (5.0, 15.0)
+        client._core_api.list_namespaced_pod.return_value.data = json.dumps(
+            {
+                "items": [
+                    {"metadata": {"name": "pod-1"}, "spec": {"nodeName": "host-1"}},
+                    {"metadata": {"name": "pending"}, "spec": {}},
+                    {"metadata": {"name": "pod-2"}, "spec": {"nodeName": "host-2"}},
+                ]
+            }
+        ).encode()
+
+        result = list(client.list_pod_nodes(namespace="my-ns", label_selector="a=b"))
+
+        self.assertEqual(result, [("pod-1", "host-1"), ("pod-2", "host-2")])
+        client._core_api.list_namespaced_pod.assert_called_once_with(
+            namespace="my-ns",
+            label_selector="a=b",
+            resource_version="0",
+            _preload_content=False,
+            _request_timeout=(5.0, 15.0),
+        )
+
+    @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
+    def test_list_pod_nodes_all_namespaces(self, mock_init: MagicMock) -> None:
+        mock_init.return_value = None
+
+        from gcm.monitoring.kubernetes.api_client import KubernetesApiClient
+
+        client = KubernetesApiClient.__new__(KubernetesApiClient)
+        client._core_api = MagicMock()
+        client._request_timeout_seconds = None
+        all_namespaces = client._core_api.list_pod_for_all_namespaces
+        all_namespaces.return_value.data = b'{"items": null}'
+
+        self.assertEqual(list(client.list_pod_nodes()), [])
+        client._core_api.list_namespaced_pod.assert_not_called()
+
+    @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
+    def test_list_pod_nodes_errors_raise_runtime_error(
+        self, mock_init: MagicMock
+    ) -> None:
+        mock_init.return_value = None
+
+        from gcm.monitoring.kubernetes.api_client import KubernetesApiClient
+
+        client = KubernetesApiClient.__new__(KubernetesApiClient)
+        client._core_api = MagicMock()
+        client._request_timeout_seconds = None
+        client._core_api.list_namespaced_pod.return_value.data = b"not json"
+
+        with self.assertRaises(RuntimeError) as ctx:
+            list(client.list_pod_nodes(namespace="my-ns"))
+        self.assertIn("Failed to list pods", str(ctx.exception))
 
     @patch("gcm.monitoring.kubernetes.api_client.KubernetesApiClient.__init__")
     def test_list_node_conditions(self, mock_init: MagicMock) -> None:

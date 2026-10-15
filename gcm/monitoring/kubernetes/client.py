@@ -23,6 +23,21 @@ class KubernetesClient(Protocol):
         If an error occurs during execution, RuntimeError should be raised.
         """
 
+    def list_pod_nodes(
+        self, namespace: str = "", label_selector: str = ""
+    ) -> Iterable[tuple[str, str]]:
+        """Get (pod name, node name) pairs for scheduled pods.
+
+        A lightweight alternative to `list_pods` for callers that only need
+        pod placement.
+
+        Args:
+            namespace: Kubernetes namespace to filter pods. Empty string means all namespaces.
+            label_selector: Kubernetes label selector to filter pods.
+
+        If an error occurs during execution, RuntimeError should be raised.
+        """
+
     def list_node_conditions(self) -> Iterable[KubernetesNodeConditionRow]:
         """Get node condition information from the Kubernetes API.
 
@@ -35,11 +50,9 @@ def get_pod_node_mapping(
     namespace: str = "",
     label_selector: str = "",
 ) -> dict[str, str]:
-    return {
-        pod.name: pod.node_name
-        for pod in client.list_pods(
+    return dict(
+        client.list_pod_nodes(
             namespace=namespace,
             label_selector=label_selector,
         )
-        if pod.name is not None and pod.node_name is not None
-    }
+    )

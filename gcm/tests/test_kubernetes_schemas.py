@@ -111,6 +111,7 @@ class TestKubernetesClientProtocol(unittest.TestCase):
     def test_protocol_is_importable(self) -> None:
         """Verify the protocol can be imported and used as a type."""
         self.assertTrue(hasattr(KubernetesClient, "list_pods"))
+        self.assertTrue(hasattr(KubernetesClient, "list_pod_nodes"))
         self.assertTrue(hasattr(KubernetesClient, "list_node_conditions"))
 
 

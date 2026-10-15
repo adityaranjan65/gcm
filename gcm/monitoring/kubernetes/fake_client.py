@@ -25,5 +25,12 @@ class KubernetesFakeClient(KubernetesClient):
                 continue
             yield pod
 
+    def list_pod_nodes(
+        self, namespace: str = "", label_selector: str = ""
+    ) -> Iterable[tuple[str, str]]:
+        for pod in self.list_pods(namespace=namespace, label_selector=label_selector):
+            if pod.name is not None and pod.node_name is not None:
+                yield pod.name, pod.node_name
+
     def list_node_conditions(self) -> Iterable[KubernetesNodeConditionRow]:
         yield from self.node_conditions

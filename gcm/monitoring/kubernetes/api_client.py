@@ -2,6 +2,7 @@
 # All rights reserved.
 from __future__ import annotations
 
+import json
 import logging
 from typing import Iterable
 
@@ -20,13 +21,15 @@ class KubernetesApiClient(KubernetesClient):
     Requires the ``kubernetes`` package: ``pip install kubernetes``.
     """
 
-    _request_timeout_seconds: float | None = None
+    # (connect, read) seconds per attempt. kubernetes 28.x silently ignores a
+    # float timeout, so only the tuple form is accepted.
+    _request_timeout_seconds: tuple[float, float] | None = None
 
     def __init__(
         self,
         *,
         in_cluster: bool = True,
-        request_timeout_seconds: float | None = None,
+        request_timeout_seconds: tuple[float, float] | None = None,
     ) -> None:
         try:
             import kubernetes  # type: ignore[import-not-found]  # noqa: F401
@@ -90,6 +93,35 @@ class KubernetesApiClient(KubernetesClient):
                     container_name=None,
                     slurm_job_id=slurm_job_id,
                 )
+
+    def list_pod_nodes(
+        self, namespace: str = "", label_selector: str = ""
+    ) -> Iterable[tuple[str, str]]:
+        # Deserializing full V1Pod models costs ~10x the CPU and memory of
+        # plain JSON on large clusters, so read the raw response instead.
+        # resource_version="0" lets the API server answer from its watch cache.
+        kwargs = {
+            "label_selector": label_selector,
+            "resource_version": "0",
+            "_preload_content": False,
+            "_request_timeout": self._request_timeout_seconds,
+        }
+        try:
+            if namespace:
+                response = self._core_api.list_namespaced_pod(
+                    namespace=namespace, **kwargs
+                )
+            else:
+                response = self._core_api.list_pod_for_all_namespaces(**kwargs)
+            items = json.loads(response.data).get("items") or []
+        except Exception as e:
+            raise RuntimeError(f"Failed to list pods: {e}") from e
+
+        for pod in items:
+            name = (pod.get("metadata") or {}).get("name")
+            node_name = (pod.get("spec") or {}).get("nodeName")
+            if name and node_name:
+                yield name, node_name
 
     def list_node_conditions(self) -> Iterable[KubernetesNodeConditionRow]:
         try:

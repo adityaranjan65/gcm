@@ -270,7 +270,7 @@ class TestSacctPublish:
     ) -> None:
         runner = CliRunner()
         kubernetes_client = create_autospec(KubernetesFakeClient, instance=True)
-        kubernetes_client.list_pods.side_effect = RuntimeError("API unavailable")
+        kubernetes_client.list_pod_nodes.side_effect = RuntimeError("API unavailable")
         create_kubernetes_client = cast(MagicMock, stub_obj.create_kubernetes_client)
         create_kubernetes_client.return_value = kubernetes_client
 

@@ -54,7 +54,7 @@ from typeguard import typechecked
 from typing_extensions import Literal
 
 LOGGER_NAME = "sacct_publish"
-KUBERNETES_REQUEST_TIMEOUT_SECONDS = 5.0
+KUBERNETES_REQUEST_TIMEOUT_SECONDS = (5.0, 15.0)
 
 logger: logging.Logger = logging.getLogger(
     LOGGER_NAME
